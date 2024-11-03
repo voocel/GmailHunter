@@ -2,9 +2,10 @@ import json
 from playwright.sync_api import sync_playwright
 import time
 import logging
-from typing import Tuple
+from typing import Tuple, List
 from pathlib import Path
 from datetime import datetime
+import argparse
 
 class GmailChecker:
     def __init__(self, headless: bool = True):
@@ -43,32 +44,28 @@ class GmailChecker:
             
             logging.info("5. 填写生日信息...")
             try:
-                # 1. 选择月份 (1月)
                 logging.info("选择月份...")
                 month_select = page.locator("select").first
                 month_select.select_option("1")
                 time.sleep(0.5)
-                
-                # 2. 直接输入日期 (1号)
+
                 logging.info("输入日期...")
                 day_input = page.locator("input[name='day']")
                 day_input.click()
                 day_input.press("Backspace")
                 day_input.type("1")
                 time.sleep(0.5)
-                
-                # 3. 直接输入年份 (2000年)
+
                 logging.info("输入年份...")
                 year_input = page.locator("input[name='year']")
                 year_input.click()
                 year_input.press("Backspace")
                 year_input.type("2000")
                 time.sleep(0.5)
-                
-                # 4. 选择性别 (男)
+
                 logging.info("选择性别...")
                 gender_select = page.locator("select").nth(1)
-                gender_select.select_option("1")
+                gender_select.select_option("2")
                 time.sleep(0.5)
                 
                 # 保存填写后的页面状态
@@ -81,17 +78,31 @@ class GmailChecker:
                 time.sleep(1)
                 
                 logging.info("7. 等待用户名页面...")
-                # 等待用户名输入框，使用多个可能的选择器
+                # 尝试查找单选按钮或用户名输入框
+                try:
+                    # 首先快速检查是否有单选按钮
+                    radio_buttons = page.query_selector_all("input[type='radio']")
+                    if radio_buttons:
+                        logging.info(f"找到 {len(radio_buttons)} 个选项")
+                        # 选择最后一个选项（创建自己的 Gmail 地址）
+                        last_radio = radio_buttons[-1]
+                        last_radio.click()
+                        logging.info("已选择'创建您自己的 Gmail 地址'选项")
+                        time.sleep(1)
+                except Exception as e:
+                    logging.info("未找到单选按钮，尝试直接查找用户名输入框")
+                
+                # 等待并填写用户名
                 username_input = None
                 selectors = [
-                    "input[type='email']",
+                    "input[type='text']",
                     "input[name='Username']",
-                    "input.whsOnd.zHQkBf"
+                    "input[type='email']"
                 ]
                 
                 for selector in selectors:
                     try:
-                        username_input = page.wait_for_selector(selector, timeout=5000)
+                        username_input = page.wait_for_selector(selector, timeout=3000)
                         if username_input:
                             logging.info(f"找到用户名输入框: {selector}")
                             break
@@ -113,7 +124,7 @@ class GmailChecker:
                 try:
                     # 等待可能的结果：要么是错误提示，要么是密码页面
                     result = page.wait_for_selector(
-                        "div[aria-live='assertive'], input[type='password']",  # 错误提示 或 密码输入框
+                        "div[aria-live='assertive'], input[type='password']",
                         timeout=3000
                     )
                     
@@ -130,7 +141,7 @@ class GmailChecker:
                             # 找到密码输入框，说明用户名可用
                             logging.info("已进入密码设置页面")
                             return True, "用户名可用"
-                                
+                            
                 except Exception as e:
                     logging.error(f"检查结果时出错: {str(e)}")
                     page.screenshot(path="error_state.png")
@@ -152,8 +163,51 @@ class GmailChecker:
             if playwright:
                 playwright.stop()
 
+def check_usernames_from_file(checker: GmailChecker, filename: str) -> List[dict]:
+    """从文件批量检查用户名"""
+    results = []
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            usernames = [line.strip() for line in f if line.strip()]
+            
+        logging.info(f"从文件 {filename} 中读取到 {len(usernames)} 个用户名")
+        
+        for username in usernames:
+            logging.info(f"\n{'='*30}\n开始检查用户名: {username}")
+            status, message = checker.check_username(username)
+            
+            result = {
+                "username": username,
+                "available": status,
+                "message": message,
+                "check_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            results.append(result)
+            
+            # 打印单个结果
+            print(f"\n检查结果:")
+            print("-" * 30)
+            print(f"用户名: {username}")
+            print(f"状态: {'✅ 可用' if status else '❌ 不可用'}")
+            print(f"详细信息: {message}")
+            print(f"检查时间: {result['check_time']}")
+            print("-" * 30)
+            
+    except Exception as e:
+        logging.error(f"读取文件失败: {str(e)}")
+        
+    return results
+
 def main():
     """主函数"""
+    # 设置命令行参数
+    parser = argparse.ArgumentParser(description='Gmail 用户名可用性检查工具')
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('username', nargs='?', help='要检查的用户名')
+    group.add_argument('-f', '--file', help='包含用户名列表的文件路径')
+    parser.add_argument('--headless', action='store_true', help='使用无头模式（不显示浏览器）')
+    args = parser.parse_args()
+    
     # 设置日志
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
@@ -167,33 +221,44 @@ def main():
         ]
     )
     
-    # 检查用户名
-    username = "firebase331q"
+    # 创建检查器实例
+    checker = GmailChecker(headless=args.headless)
     
-    logging.info(f"开始检查用户名: {username}")
+    # 保存结果的列表
+    results = []
     
-    checker = GmailChecker(headless=False)  # 设为 False 以便观察
-    status, message = checker.check_username(username)
+    # 根据参数执行检查
+    if args.file:
+        # 批量检查
+        results = check_usernames_from_file(checker, args.file)
+    else:
+        # 单个用户名检查
+        logging.info(f"开始检查用户名: {args.username}")
+        status, message = checker.check_username(args.username)
+        
+        result = {
+            "username": args.username,
+            "available": status,
+            "message": message,
+            "check_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        results.append(result)
+        
+        # 打印结果
+        print("\n检查结果:")
+        print("-" * 30)
+        print(f"用户名: {args.username}")
+        print(f"状态: {'✅ 可用' if status else '❌ 不可用'}")
+        print(f"详细信息: {message}")
+        print(f"检查时间: {result['check_time']}")
+        print("-" * 30)
     
-    # 打印结果
-    print("\n检查结果:")
-    print("-" * 30)
-    print(f"用户名: {username}")
-    print(f"状态: {'✅ 可用' if status else '❌ 不可用'}")
-    print(f"详细信息: {message}")
-    print(f"检查时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("-" * 30)
+    # 保存所有结果到 JSON 文件
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    with open(f"results_{timestamp}.json", 'w', encoding='utf-8') as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
     
-    # 保存结果
-    result = {
-        "username": username,
-        "available": status,
-        "message": message,
-        "check_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    
-    with open(f"results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json", 'w', encoding='utf-8') as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+    logging.info(f"结果已保存到 results_{timestamp}.json")
 
 if __name__ == "__main__":
     main()
