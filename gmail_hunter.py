@@ -41,12 +41,12 @@ class GmailRegistration:
         logging.info("🌐 正在访问注册页面...")
         page.goto("https://accounts.google.com/signup")
         time.sleep(2)
-        
+
         logging.info("📝 开始填写注册信息...")
         GmailRegistration._fill_basic_info(page)
         GmailRegistration._fill_birthday_and_gender(page)
-        GmailRegistration._select_gmail_option(page)
-        logging.info("✅ 注册信息填写完成")
+        # Gmail新版流程：生日后直接进入用户名输入页面
+        logging.info("✅ 注册信息填写完成，已进入用户名输入页面")
     
     @staticmethod
     def _fill_basic_info(page) -> None:
@@ -60,41 +60,70 @@ class GmailRegistration:
     
     @staticmethod
     def _fill_birthday_and_gender(page) -> None:
-        """填写生日和性别"""
+        """填写生日和性别 - 支持新版Gmail Material Design UI"""
         logging.info("📅 正在填写生日信息...")
-        # 填写生日
-        page.evaluate("""() => {
-            const fields = {
-                month: document.querySelector('select[name="month"]') || document.querySelector('select'),
-                day: document.querySelector('input[name="day"]') || document.querySelectorAll('input[type="text"]')[0],
-                year: document.querySelector('input[name="year"]') || document.querySelectorAll('input[type="text"]')[1]
-            };
-            Object.entries({month: '1', day: '1', year: '2000'}).forEach(([key, value]) => {
-                if (fields[key]) {
-                    fields[key].value = value;
-                    fields[key].dispatchEvent(new Event('input', {bubbles: true}));
-                    fields[key].dispatchEvent(new Event('change', {bubbles: true}));
-                }
-            });
-        }""")
+        time.sleep(2)
+
+        # 1. 填写年份（普通input）
+        try:
+            page.fill("input[name='year']", "1995")
+            time.sleep(0.5)
+        except:
+            logging.warning("⚠️ 年份填写可能失败")
+
+        # 2. 点击月份combobox并选择
+        try:
+            logging.info("   选择月份...")
+            # Gmail新UI使用 div[role='combobox']
+            month_trigger = page.locator("div[role='combobox']").first
+            month_trigger.click()
+            time.sleep(1.5)
+            # 选择第一个选项（1月）
+            page.locator("li[role='option'], div[role='option']").first.click(force=True)
+            time.sleep(1)  # 等待popup完全关闭
+            logging.info("   ✅ 月份选择成功")
+        except Exception as e:
+            logging.warning(f"⚠️ 月份选择失败: {e}")
+
+        # 3. 填写日期（普通input）
+        try:
+            page.fill("input[name='day']", "15")
+            time.sleep(0.5)
+        except:
+            logging.warning("⚠️ 日期填写可能失败")
+
         logging.info("✅ 生日信息填写完成")
-        
-        logging.info("👤 正在选择性别...")
-        page.locator('select').nth(1).select_option("2")
-        time.sleep(1)
+
+        # 4. 选择性别（第二个combobox）
+        try:
+            logging.info("👤 正在选择性别...")
+            gender_trigger = page.locator("div[role='combobox']").nth(1)
+            gender_trigger.click()
+            time.sleep(1.5)  # 等待dropdown展开
+            # 使用键盘操作选择：向下箭头2次，然后回车
+            page.keyboard.press("ArrowDown")
+            time.sleep(0.3)
+            page.keyboard.press("ArrowDown")
+            time.sleep(0.3)
+            page.keyboard.press("Enter")
+            time.sleep(1)
+            logging.info("✅ 性别选择完成")
+        except Exception as e:
+            logging.warning(f"⚠️ 性别选择失败: {e}")
+
         page.get_by_role("button", name="下一步").click()
         time.sleep(2)
-        logging.info("✅ 性别选择完成")
     
     @staticmethod
     def _select_gmail_option(page) -> None:
         """选择 Gmail 地址选项"""
         logging.info("📧 正在处理 Gmail 地址选项...")
-        time.sleep(2)
+        time.sleep(3)  # 增加等待时间确保页面加载完成
         success = page.evaluate("""() => {
             const labels = Array.from(document.querySelectorAll('label'));
-            const targetLabel = labels.find(label => 
-                label.textContent.trim() === '创建您自己的 Gmail 地址'
+            const targetLabel = labels.find(label =>
+                label.textContent.includes('创建您自己的 Gmail 地址') ||
+                label.textContent.includes('Create your own Gmail')
             );
             if (targetLabel) {
                 targetLabel.click();
@@ -107,15 +136,15 @@ class GmailRegistration:
             }
             return false;
         }""")
-        
+
         if success:
             logging.info("✅ Gmail 地址选项选择成功")
         else:
-            logging.warning("⚠️ Gmail 地址选项选择可能不功")
-        
+            logging.warning("⚠️ Gmail 地址选项选择可能失败")
+
         time.sleep(2)
         page.get_by_role("button", name="下一步").click()
-        time.sleep(2)
+        time.sleep(3)  # 等待用户名页面加载
         logging.info("✅ Gmail 选项处理完成")
 
 class GmailChecker:
@@ -150,38 +179,47 @@ class GmailChecker:
         try:
             logging.info(f"🔍 正在检查: {username}")
             logging.info("🔍 查找用户名输入框...")
-            username_input = page.wait_for_selector("input[type='text']", timeout=5000)
+            # 使用更精确的选择器定位用户名输入框
+            username_input = page.wait_for_selector("input[name='Username']", timeout=5000)
             if not username_input:
                 logging.error(f"❌ {username}: 无法找到用户名输入框")
                 return (username, False, "无法找到用户名输入框")
-            
+
             # 添加随机延迟 (200ms-3s)
             delay = random.uniform(0.2, 3)
             logging.info(f"⏳ 等待 {delay:.1f} 秒...")
             time.sleep(delay)
-            
+
             username_input.fill(username)
+            time.sleep(0.5)  # 填写后稍等
+
             page.get_by_role("button", name="下一步").click()
-            
+
             logging.info("⏳ 等待检查结果...")
-            result = page.wait_for_selector(
-                "div[aria-live='assertive'], input[type='password']",
-                timeout=3000
-            )
-            
-            is_available = result.get_attribute("aria-live") != "assertive"
-            message = "用户名可用" if is_available else result.text_content() or "用户名已被使用"
-            
-            if is_available:
+            time.sleep(3)  # 增加等待时间让错误信息完全加载
+
+            # 检查是否跳转到密码页面（表示用户名可用）
+            if page.locator("input[type='password']").count() > 0:
                 logging.info(f"✅ {username}: 可用")
-                logging.info("🔄 返回上一页...")
                 page.go_back()
-                time.sleep(1)  # 返回后短暂等待
-            else:
-                logging.info(f"❌ {username}: {message}")
-            
-            return (username, is_available, message)
-            
+                time.sleep(1)
+                return (username, True, "用户名可用")
+
+            # 查找真正的错误信息 - aria-live=polite 才是错误信息！
+            error_divs = page.locator("div[aria-live='polite']").all()
+            for div in error_divs:
+                text = div.text_content().strip()
+                # 排除无关信息
+                if text and text != "简体中文" and "输入的字符数" not in text:
+                    # 这是真正的错误信息
+                    if len(text) > 5:  # 有实际内容
+                        logging.info(f"❌ {username}: {text}")
+                        return (username, False, text)
+
+            # 如果没有明确的错误，可能是其他问题
+            logging.info(f"⚠️  {username}: 状态未知")
+            return (username, False, "状态未知")
+
         except Exception as e:
             logging.error(f"❌ {username}: {str(e)}")
             return (username, False, str(e))
